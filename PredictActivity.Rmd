@@ -1,21 +1,222 @@
 ---
-title: "Predict Activity"
+title: "Course Project: Predict Activity Class"
 author: "SK Tan"
 date: "Saturday, March 14, 2015"
 output: html_document
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Executive Summary
+In this report, we derived a prediction model between an activity class outcome and a set of measurement variables in the **Weight Lifting Exercises Dataset**.  The final model was built using a RandomForest with a 3-fold cross-validation method.  The model had a 94.61% accuracy when tested on a validation set.  It also correctly classified a 20-samples test set.
 
+## Data Processing
+The training and testing datasets were read from csv files provided for this assignment.
+```{r cache=F}
+train <- read.csv("pml-training.csv")
+test <- read.csv("pml-testing.csv")
+dim(train); dim(test);
+```
+The **train** dataset had 19622 rows and 160 columns.  The **test** dataset had 20 rows and 160 columns.
 
-```{r}
-summary(cars)
+#### Exploring the Dataset
+To prepare the dataset for tidying, we first compared the column names of "train" and "test".
+```{r cache=F}
+train.names <- colnames(train)
+test.names <- colnames(test)
+sum(train.names == test.names)
+sum(train.names != test.names)
+diff.index<-which(train.names != test.names)
+print(train.names[diff.index]); print(test.names[diff.index])
+```
+From the above, we found that "train" and "test" had 159 columns in common and only 1 unique column, which happened to be the last column ("classe" vs "problem_id").
+
+Next, we looked for NA values.
+```{r cache=F}
+train.has.na <- lapply(train, function(column) sum(is.na(column)))
+test.has.na <- lapply(test, function(column) sum(is.na(column)))
+length(train.has.na[train.has.na > 0])
+length(test.has.na[test.has.na > 0])
+length(test.has.na[test.has.na == 20])
+```
+As shown above, the 20-sample test dataset had 100 columns with 20 NA values. This meant we could remove these variables as the prediction model could not use NAs to classify the samples. The train dataset had fewer columns with NAs, but if we removed the columns with NAs from test, we should do likewise for train.
+
+Examining the first 7 columns in test, we found a row number, test subject name, timestamps and window-related data.  As the subject name and timestamps will not be useful in a prediction model that will classify an activity performed by an arbitrary user at a future point in time, we could remove them.  Also, as we were not assessing "activity quality" in this assignment, we could also remove the window-related columns.
+```{r cache=F}
+head(test[,1:7],3)
 ```
 
-You can also embed plots, for example:
+#### Tidying the Dataset
+Therefore, we removed the columns with NAs in test, as well as columns 1:7.  We did likewise for train. We retained the "classe" column in train, and the "problem_id" column in test.
+```{r cache=F}
+test.keep.names <- names(test.has.na[test.has.na == 0])
+test.keep.names <- test.keep.names[8:60]
+train.keep.names <- test.keep.names
+train.keep.names[53] <- "classe"
+test.keep <- test[test.keep.names]
+train.keep <- train[train.keep.names]
+dim(train.keep); dim(test.keep);
+```
+So our tidied datasets (**train.keep** and **test.keep**) had **52 predictors** and 1 outcome variable.
 
-```{r, echo=FALSE}
-plot(cars)
+#### Splitting the Dataset
+Using the caret package, we partitioned the train.keep set into a "training" set and a "validating" set.  We chose **10%** for training and **90%** for validating.  The reason was because it significantly reduced the time needed to train() the model, without losing much accuracy.  This trade-off enabled us to quickly explore several models available in caret, described in the Appendix section.
+```{r message=FALSE, warning=FALSE, cache=F}
+library(caret)
+set.seed(125)
+testIndex <- createDataPartition(train.keep$classe, p=0.90,list=FALSE)
+training = train.keep[-testIndex,]
+validating = train.keep[testIndex,]
+dim(training); dim(validating);
+```
+Therefore, our **training** dataset had 1960 samples, while our **validating** dataset had 17662 samples.
+
+## Building the Prediction Model
+We chose to start building our prediction model using the **RandomForest** model because the authors of the original paper (see Acknowledgement section) had used it.  
+```{r message=FALSE, warning=FALSE, cache=F}
+library(caret)
+library(randomForest)
+library(rpart)
+library(gbm)
+library(klaR)
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(classe ~ ., 
+                method="rf", 
+                data=training,
+                prox=TRUE,
+                trControl = trainControl(method="cv", number=3))
+print(modFit$finalModel)
+proc.time() - ptm
+```
+Our randomForest model was derived using the **training** dataset in a quick **42 sec** with a small OOB error rate of **5.51%**.
+
+#### Cross-validation
+In our trainControl function, we had specified **3-fold cross-validation**.  We also experimented with **10-fold cross-validation** but it did not produce a better score, instead took much longer to train (see Appendix section).
+
+#### Out of Sample Error
+We ran the prediction model on the **validating** dataset and checked its accuracy.
+```{r message=FALSE, warning=FALSE, cache=F}
+validating.pred <- predict(modFit, newdata=validating)
+confusionMatrix(validating$classe, validating.pred)
+```
+It scored a good accuracy of 0.9461 or **94.61%**.  The 95% confidence interval was [0.9427, 0.9494].  Therefore, "out of sample error" was **5.39%**.
+
+#### Test Samples
+We ran the prediction model on the 20-sample **test.keep** dataset.
+```{r message=FALSE, warning=FALSE, cache=F}
+test.pred <- predict(modFit, newdata=test.keep); print(test.pred);
+```
+The assignment's auto-grader judged that these were the **correct** answers!
+
+#### Other Options
+In the Appendix section, we showed the results of using other models available in caret, namely: Trees, Boosting, Linear Discriminant Analysis and Principal Component Anaylsis.  We also tried 10-fold cross-validation with RandomForest. We measured the time required to train() each model and their prediction accuracies.
+
+- The Boosting model produced good accuracy like the RandomForest model, while requiring less time to derive the model.
+- The Principle Component Analysis method that captured 99% variance, reduced the number of predictors to 38, at a cost of lower accuracy.
+- The Linear Discriminant Analysis and Trees models took a short time to derive but had poor accuracies.
+
+## Conclusion
+Despite using only 10% of the original training dataset to generate the RandomForest model with 3-fold cross-validation, the resultant model was accurate enough to correctly classify the 20-sample test set. 
+
+## Acknowledgement
+Data Source: Weight Lifting Exercises Dataset <http://groupware.les.inf.puc-rio.br/har>.  
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. **Qualitative Activity Recognition of Weight Lifting Exercises** <http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf>
+
+
+## Appendix
+Using the caret package's train() with different method values, we measured the time taken to train a prediction model, and its accuracy when applied to the **validating** dataset.  We used 3-fold cross-validation where applicable.  The R code was hidden (echo=FALSE) whenever it closely resembled the code used in the main report.
+
+#### Trees (method="rpart")
+```{r message=FALSE, warning=FALSE, cache=F, echo=FALSE}
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(classe ~ ., 
+                method="rpart", 
+                data=training,
+                trControl = trainControl(method="cv", number=3))
+proc.time() - ptm
+validating.pred <- predict(modFit, newdata=validating)
+validating.cmatrix <- confusionMatrix(validating$classe, validating.pred)
+print(validating.cmatrix$overall["Accuracy"])
+```
+The **49.34%** accuracy obtained using the rpart model was disappointingly low.
+
+#### Boosting (method="gbm")
+```{r message=FALSE, warning=FALSE, cache=F, results='hide', echo=FALSE}
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(classe ~ ., 
+                method="gbm", 
+                data=training,
+                trControl = trainControl(method="cv", number=3))
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r message=FALSE, warning=FALSE, cache=F, echo=FALSE}
+proc.time() - ptm
+validating.pred <- predict(modFit, newdata=validating)
+validating.cmatrix <- confusionMatrix(validating$classe, validating.pred)
+print(validating.cmatrix$overall["Accuracy"])
+```
+The **92.6%** accuracy obtained using the gbm model was quite good, considering that it took only less than 20 sec to derive.
+
+#### Linear Discriminant Analysis (method="lda")
+```{r message=FALSE, warning=FALSE, cache=F, results='hide', echo=FALSE}
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(classe ~ ., 
+                method="lda", 
+                data=training,
+                trControl = trainControl(method="cv", number=3))
+```
+
+```{r message=FALSE, warning=FALSE, cache=F, echo=FALSE}
+proc.time() - ptm
+validating.pred <- predict(modFit, newdata=validating)
+validating.cmatrix <- confusionMatrix(validating$classe, validating.pred)
+print(validating.cmatrix$overall["Accuracy"])
+```
+The **68.78%** accuracy obtained using the lda model was poor.
+
+#### Principal Component Anaylsis
+Here, we applied the same steps as those in Quiz 2 Question 5. preProcess() estimated the number of components needed to capture **99%** of the variance.
+```{r message=FALSE, warning=FALSE, cache=F, echo=TRUE}
+pca.names <- train.keep.names[1:52]
+preProc <- preProcess(training[,pca.names], method="pca", thresh=0.99); print(preProc);
+```
+Then we trained a RandomForest model with 3-fold cross-validation using **38 components**.
+```{r message=FALSE, warning=FALSE, cache=F, echo=TRUE}
+training.sub <- training[,pca.names]
+preProc <- preProcess(training.sub, method="pca", pcaComp=38)
+trainPC <- predict(preProc, training.sub)
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(training$classe ~ ., 
+                method="rf", 
+                data=trainPC,
+                prox=TRUE,
+                trControl = trainControl(method="cv", number=3))
+proc.time() - ptm
+```
+
+```{r message=FALSE, warning=FALSE, cache=F, echo=TRUE}
+validating.sub <- validating[,pca.names]
+validatingPC <- predict(preProc, validating.sub)
+validatingPC.cmatrix <- confusionMatrix(validating$classe, predict(modFit, validatingPC))
+print(validatingPC.cmatrix$overall["Accuracy"])
+```
+By using 38 components instead of 52, the elapsed time was reduced.  However, the accuracy dropped to **88.5%**.
+
+#### RandomForest with 10-fold Cross-Validation
+Here, the only difference from what we did in the main report was we specified **number=10** for 10-fold cross-validation, in the call to trainControl().
+```{r message=FALSE, warning=FALSE, cache=F, echo=FALSE}
+set.seed(125)
+ptm <- proc.time()
+modFit <- train(classe ~ ., 
+                method="rf", 
+                data=training,
+                trControl = trainControl(method="cv", number=10))
+proc.time() - ptm
+validating.pred <- predict(modFit, newdata=validating)
+validating.cmatrix <- confusionMatrix(validating$classe, validating.pred)
+print(validating.cmatrix$overall["Accuracy"])
+```
+The accuracy of **94.61%** was similar to that obtained from using RandomForest with 3-fold cross-validation. However, the elapsed time had increased by **3 times**.
